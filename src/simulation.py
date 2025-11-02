@@ -1,93 +1,101 @@
 import pygame
-import random
+import numpy as np
 from src.organism import Organism
 from src.food import FoodManager
-from src.gui import draw_grid_and_organisms, draw_histograms, draw_counters
-
-GRID_SIZE = 1000
-STEP_SIZE = 30
-ORG_COLOR = (70, 130, 180)
-FOOD_COLOR = (34, 139, 34)
-BG_COLOR = (250, 250, 250)
-INITIAL_POPULATION = 20
-
-# Constants for initial organism traits & reproduction parameters (constant for initial population)
-INITIAL_SPEED = 3.5
-INITIAL_SIZE = 10
-INITIAL_SENSORY_RANGE = 40
-INITIAL_HEALTH = 90
-INITIAL_ENERGY = 0.5
-MIN_REPRO_ENERGY = 0.8
-ENERGY_TRANSFER_RATIO = 0.5
+from src.gui import GUI
 
 class EvolutionSimulation:
-    STEP_SIZE = STEP_SIZE
+    """
+    Main class that runs the simulation loop, updating organisms, food,
+    and GUI rendering.
+    """
 
     def __init__(self):
-        self.population = []
-        self.food_manager = FoodManager(GRID_SIZE)
-        pygame.init()
-        self.pygame = pygame
-        self.screen = pygame.display.set_mode((GRID_SIZE + 600, GRID_SIZE))
+        # Initialize organisms list
+        self.organisms = []
+        initial_population = 120
+        for _ in range(initial_population):
+            # Randomize initial organism start positions
+            pos_x = np.random.uniform(0, 1000)
+            pos_y = np.random.uniform(0, 1000)
+            # Traits based on initial project parameters
+            speed = 3.5
+            size = 10
+            sensory_range = 40
+            energy = 150
+            health = 90
+            min_repro_energy = (size ** 2) * 35 * 0.5
+            energy_transfer_ratio = 0.5
+
+            org = Organism(pos_x, pos_y, speed, size, sensory_range,
+                           energy, health, min_repro_energy, energy_transfer_ratio)
+            self.organisms.append(org)
+
+        # Initialize food manager
+        self.food_manager = FoodManager(max_food=500, respawn_rate=40, grid_size=1000)
+
+        # Initialize GUI
+        self.gui = GUI(width=1400, height=1000)
+
+        # Control simulation frame rate
         self.clock = pygame.time.Clock()
-        self.bg = pygame.Surface(self.screen.get_size())
-        self.bg.fill(BG_COLOR)
+        self.fps = 30
 
-        # Initialize population with constant parameters, including new reproduction params
-        for _ in range(INITIAL_POPULATION):
-            org = Organism(
-                random.randint(0, GRID_SIZE - 1),
-                random.randint(0, GRID_SIZE - 1),
-                INITIAL_SPEED,
-                INITIAL_SIZE,
-                INITIAL_ENERGY,
-                INITIAL_HEALTH,
-                INITIAL_SENSORY_RANGE,
-                min_reproduction_energy=MIN_REPRO_ENERGY,
-                energy_transfer_ratio=ENERGY_TRANSFER_RATIO
-            )
-            self.population.append(org)
-
-    def organism_step(self, organism):
-        """
-        Wrapper calling organism’s self-contained step behavior.
-        Here zigzag_move=True enables zig-zag pattern movement.
-        """
-        return organism.step(
-            self.food_manager.foods,
-            self.population,
-            GRID_SIZE,
-            zigzag_move=True
-        )
-
-    def draw(self, step_number, num_organisms, num_foods):
-        """
-        Draw organisms, food, histograms, and counters.
-        """
-        draw_grid_and_organisms(self.screen, self.bg, self.food_manager.foods, self.population, ORG_COLOR, FOOD_COLOR)
-        draw_histograms(self.screen, self.population, GRID_SIZE)
-        draw_counters(self.screen, step_number, num_organisms, num_foods, GRID_SIZE)
-        pygame.display.flip()
+        self.step_count = 0
 
     def run(self):
         running = True
-        step = 0
         while running:
-            self.clock.tick(self.STEP_SIZE)
+            # Handle events (quit, etc.)
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
 
-            new_population = []
-            for org in self.population:
-                if self.organism_step(org):
-                    new_population.append(org)
-            self.population = new_population
+            # Prepare food data arrays for organism updates
+            food_positions = self.food_manager.food_positions
+            food_energies = self.food_manager.food_energies
+            food_available = self.food_manager.food_available
 
-            if step % 14 == 0:
+            new_organisms = []
+
+            # Update each organism - let organisms move, consume, reproduce or die
+            survivors = 0
+            for org in self.organisms:
+                # Organism step function returns alive/dead status and offspring traits if any
+                status, offspring_traits = org.step(food_positions, food_energies, food_available)
+                if status == "alive":
+                    # Organism tries to consume food at its position
+                    energy_gained = self.food_manager.consume_food(np.array([org.pos_x, org.pos_y]))
+                    org.energy += energy_gained
+                    survivors += 1
+                    new_organisms.append(org)
+
+                    # If offspring present, create Organism instance and add to new list
+                    if offspring_traits is not None:
+                        offspring = Organism(**offspring_traits)
+                        new_organisms.append(offspring)
+                # Dead organisms are discarded
+
+            # Update population list to survivors plus offspring
+            self.organisms = new_organisms
+
+            # Respawn food periodically (e.g. every 14 steps)
+            if self.step_count % 14 == 0:
                 self.food_manager.respawn_food()
 
-            self.draw(step, len(self.population), len(self.food_manager.foods))
-            step += 1
+            # Update GUI display with current state
+            self.gui.draw(self.organisms,
+                          self.food_manager.food_positions,
+                          self.food_manager.food_available,
+                          self.step_count, survivors, np.sum(self.food_manager.food_available))
+
+            self.step_count += 1
+
+            # Cap frame rate to reduce excessive CPU load
+            self.clock.tick(self.fps)
 
         pygame.quit()
+
+if __name__ == '__main__':
+    sim = EvolutionSimulation()
+    sim.run()

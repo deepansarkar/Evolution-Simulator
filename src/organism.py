@@ -1,163 +1,143 @@
 import numpy as np
-import random
-
-TRAIT_MUTATION_RATE = 0.02
 
 class Organism:
     """
-    Organism represents an individual with traits and biological behaviors.
+    Class representing each organism in the simulation.
     """
-    def __init__(self, pos_x, pos_y, speed, size, energy, health, sensory_range,
-                 min_reproduction_energy, energy_transfer_ratio):
-        """
-        Initialize organism with traits and reproduction parameters.
-        """
+
+    def __init__(self, pos_x, pos_y, speed, size, sensory_range, energy, health, min_repro_energy, energy_transfer_ratio):
         self.pos_x = pos_x
         self.pos_y = pos_y
         self.speed = speed
         self.size = size
-        self.max_energy = size ** 2 * 35
-        self.energy = self.max_energy * energy
-        self.health = health
         self.sensory_range = sensory_range
-        self.min_reproduction_energy = min_reproduction_energy
+        self.energy = energy
+        self.health = health
+        self.min_repro_energy = min_repro_energy
         self.energy_transfer_ratio = energy_transfer_ratio
 
-        # For zig-zag movement toggle
-        self.zigzag_toggle = True
+    def step(self, food_positions, food_energies, food_available):
+        """
+        Perform one simulation step: move toward food, consume energy,
+        possibly reproduce or die.
 
-    def perceive(self, food_sources):
-        """
-        Return nearby foods within sensory range.
-        """
-        visible = []
-        for food in food_sources:
-            if abs(food.pos_x - self.pos_x) < self.sensory_range and abs(food.pos_y - self.pos_y) < self.sensory_range:
-                visible.append(food)
-        return visible
+        Args:
+            food_positions (np.ndarray): Array of food coordinates shape (N, 2).
+            food_energies (np.ndarray): Corresponding energy of foods shape (N,).
+            food_available (np.ndarray): Boolean mask whether food is still available (shape N,).
 
-    def move_toward(self, target_x, target_y, grid_size, zigzag=False):
+        Returns:
+            str: "alive" or "dead" depending on energy and health.
+            dict: offspring info if reproduction occurs, else None.
         """
-        Move toward target coordinates.
-        If zigzag=True, alternate horizontal and vertical moves each step for zigzag pattern.
-        """
-        dx = target_x - self.pos_x
-        dy = target_y - self.pos_y
+        # Only consider available food items for detection
+        available_food_positions = food_positions[food_available]
 
-        if not zigzag:
-            # Direct movement towards target
-            if dx != 0:
-                self.pos_x += max(-self.speed, min(self.speed, dx // abs(dx)))
-            if dy != 0:
-                self.pos_y += max(-self.speed, min(self.speed, dy // abs(dy)))
+        # Defensive check: If no food available, wander randomly
+        if len(available_food_positions) == 0:
+            self._random_move()
         else:
-            # Zigzag alternate movement
-            if self.zigzag_toggle:
-                # Move horizontally if possible
-                if dx != 0:
-                    self.pos_x += max(-self.speed, min(self.speed, dx // abs(dx)))
-                else:
-                    if dy != 0:
-                        self.pos_y += max(-self.speed, min(self.speed, dy // abs(dy)))
+            # Calculate squared distances to available food
+            dists_sq = np.sum((available_food_positions - np.array([self.pos_x, self.pos_y]))**2, axis=1)
+            sensory_range_sq = self.sensory_range ** 2
+            in_range_mask = dists_sq < sensory_range_sq
+
+            if np.any(in_range_mask):
+                # Get nearest food index within range
+                nearest_index = np.argmin(dists_sq[in_range_mask])
+                indices_in_range = np.where(in_range_mask)[0]
+                nearest_food_pos = available_food_positions[indices_in_range[nearest_index]]
+
+                # Move toward the nearest food
+                self._move_towards(nearest_food_pos)
             else:
-                # Move vertically if possible
-                if dy != 0:
-                    self.pos_y += max(-self.speed, min(self.speed, dy // abs(dy)))
-                else:
-                    if dx != 0:
-                        self.pos_x += max(-self.speed, min(self.speed, dx // abs(dx)))
-            # Toggle flag for next step
-            self.zigzag_toggle = not self.zigzag_toggle
+                # No food in sensory range, random wandering
+                self._random_move()
 
-        # Boundaries check
-        self.pos_x = max(0, min(grid_size - 1, self.pos_x))
-        self.pos_y = max(0, min(grid_size - 1, self.pos_y))
+        # Clamp position within grid limits (0 to 1000)
+        self.pos_x = max(0, min(1000, self.pos_x))
+        self.pos_y = max(0, min(1000, self.pos_y))
 
-    def random_move(self, grid_size, zigzag=False):
-        """
-        Make random movement either normally or zigzag alternation.
-        """
-        if not zigzag:
-            # Choose random cardinal direction
-            move_dir = random.choice([(1, 0), (-1, 0), (0, 1), (0, -1)])
-            self.pos_x += move_dir[0] * self.speed
-            self.pos_y += move_dir[1] * self.speed
+        # Energy cost calculation (movement + size cost)
+        movement_cost = 0.1 * self.speed + 0.01 * self.size
+        self.energy -= movement_cost
+
+        # Health degradation if energy low
+        if self.energy < 10:
+            self.health -= 1
+
+        offspring = None
+        # Check for reproduction
+        if self.energy > self.min_repro_energy:
+            offspring_energy = self.energy * self.energy_transfer_ratio
+            self.energy *= (1 - self.energy_transfer_ratio)
+
+            # Create offspring traits (mutated)
+            offspring = self._reproduce(offspring_energy)
+
+        # Death conditions
+        if self.health <= 0 or self.energy <= 0:
+            return "dead", None
         else:
-            # Zigzag random movement: alternate horizontal/vertical steps randomly each move
-            if self.zigzag_toggle:
-                # Horizontal move randomly right or left
-                move_dir = random.choice([(1, 0), (-1, 0)])
-                self.pos_x += move_dir[0] * self.speed
-            else:
-                # Vertical move randomly up or down
-                move_dir = random.choice([(0, 1), (0, -1)])
-                self.pos_y += move_dir[1] * self.speed
-            self.zigzag_toggle = not self.zigzag_toggle
+            return "alive", offspring
 
-        # Boundaries check
-        self.pos_x = max(0, min(grid_size - 1, self.pos_x))
-        self.pos_y = max(0, min(grid_size - 1, self.pos_y))
+    def _move_towards(self, target_pos):
+        """
+        Move organism toward target position.
 
-    def eat(self, food, food_list):
+        Args:
+            target_pos (np.ndarray): Array with x, y target coordinates.
         """
-        Consume food: increase energy then remove food from environment.
-        """
-        self.energy = min(self.energy + food.energy, self.max_energy)
-        food_list.remove(food)
+        direction = target_pos - np.array([self.pos_x, self.pos_y])
+        norm = np.linalg.norm(direction)
 
-    def reproduce(self, population):
-        """
-        Create offspring if sufficient energy.
-        Offspring inherits mutated traits.
-        """
-        if self.energy >= self.min_reproduction_energy and random.random() < 0.08:
-            child_energy = self.energy * self.energy_transfer_ratio
-            child_traits = [
-                self.pos_x,
-                self.pos_y,
-                max(0.1, self.speed + random.gauss(0, TRAIT_MUTATION_RATE * self.speed)),
-                max(0.1, self.size + random.gauss(0, TRAIT_MUTATION_RATE * self.size)),
-                child_energy,
-                self.health,
-                max(5, self.sensory_range + random.gauss(0, TRAIT_MUTATION_RATE * self.sensory_range)),
-                self.min_reproduction_energy,
-                self.energy_transfer_ratio
-            ]
-            self.energy -= child_energy  # Deduct transferred energy from parent
-            population.append(Organism(*child_traits))
+        if norm > 0:
+            direction = direction / norm
+            move_dist = min(self.speed, norm)
+            self.pos_x += direction[0] * move_dist
+            self.pos_y += direction[1] * move_dist
 
-    def energy_update(self):
+    def _random_move(self):
         """
-        Costs energy proportional to speed and size; health decreases if energy is low.
+        Move organism randomly in one cardinal direction scaled by speed.
         """
-        cost = self.speed * self.size * 0.05 + 0.012 * self.size ** 2
-        self.energy -= cost
-        if self.energy < 30:
-            self.health -= (30 - self.energy) * 0.08
+        step_choices = np.array([[1, 0], [-1, 0], [0, 1], [0, -1]])
+        random_step = step_choices[np.random.randint(0, 4)] * self.speed
+        self.pos_x += random_step[0]
+        self.pos_y += random_step[1]
 
-    def step(self, food_list, population, grid_size, zigzag_move=False):
+    def _reproduce(self, offspring_energy):
         """
-        One behavior step combining perception, movement, eating, reproduction, and energy update.
-        """
-        visible_food = self.perceive(food_list)
-        if self.energy < self.min_reproduction_energy and visible_food:
-            # Move toward nearest food, possibly zigzag
-            nearest = min(visible_food, key=lambda f: ((f.pos_x - self.pos_x)**2 + (f.pos_y - self.pos_y)**2)**0.5)
-            self.move_toward(nearest.pos_x, nearest.pos_y, grid_size, zigzag=zigzag_move)
-            # Check adjacent food to eat
-            for food in food_list:
-                if abs(food.pos_x - self.pos_x) <= 1 and abs(food.pos_y - self.pos_y) <= 1:
-                    self.eat(food, food_list)
-                    break
-            else:
-                self.energy_update()
-        else:
-            # Reproduce if enough energy, else random move and energy update
-            if self.energy >= self.min_reproduction_energy:
-                self.reproduce(population)
-            else:
-                self.random_move(grid_size, zigzag=zigzag_move)
-                self.energy_update()
+        Produce offspring with mutated traits.
 
-        # Check survival condition
-        return self.health >= 5 and self.energy >= 0
+        Args:
+            offspring_energy (float): energy to give to offspring.
+
+        Returns:
+            dict: offspring traits and energy.
+        """
+        # Gaussian mutation parameters
+        mutation_rate = 0.02  # 2%
+        mutated_speed = max(0.1, self.speed + np.random.normal(0, mutation_rate * self.speed))
+        mutated_size = max(1, self.size + np.random.normal(0, mutation_rate * self.size))
+        mutated_sensory_range = max(1, self.sensory_range + np.random.normal(0, mutation_rate * self.sensory_range))
+        mutated_health = 90  # reset health for offspring
+
+        # Calculate offspring's minimum reproduction energy based on size
+        offspring_min_repro_energy = (mutated_size ** 2) * 35 * 0.5
+
+        offspring_energy_transfer_ratio = 0.5  # fixed
+
+        offspring_traits = {
+            "pos_x": self.pos_x,
+            "pos_y": self.pos_y,
+            "speed": mutated_speed,
+            "size": mutated_size,
+            "sensory_range": mutated_sensory_range,
+            "energy": offspring_energy,
+            "health": mutated_health,
+            "min_repro_energy": offspring_min_repro_energy,
+            "energy_transfer_ratio": offspring_energy_transfer_ratio
+        }
+
+        return offspring_traits
